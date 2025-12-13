@@ -4,9 +4,12 @@ import random
 import asyncio
 from dotenv import dotenv_values  # ✅ APPROVED
 
-# Load environment variables safely (NO os, NO dynamic imports)
+# Load .env from bot repo directory
 config = dotenv_values()
 TOKEN = config.get("DISCORD_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN is missing from .env")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -102,5 +105,4 @@ async def game_loop():
             channel = bot.get_channel(game.channel_id)
             await channel.send(f"💀 **{attacker} GOT YOU!**")
 
-# ✅ NERDHOSTING-APPROVED TOKEN USAGE
 bot.run(TOKEN)
