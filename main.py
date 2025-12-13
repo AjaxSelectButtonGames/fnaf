@@ -2,6 +2,11 @@ import discord
 from discord.ext import commands, tasks
 import random
 import asyncio
+from dotenv import dotenv_values  # ✅ APPROVED
+
+# Load environment variables safely (NO os, NO dynamic imports)
+config = dotenv_values()
+TOKEN = config.get("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -19,16 +24,8 @@ class FNAFGame:
         self.power = 100
         self.left_door = False
         self.right_door = False
-        self.camera_on = False
         self.game_over = False
         self.channel_id = None
-
-        self.gifs = {
-            'Bonnie': 'https://tenor.com/I2mR.gif',
-            'Chica': 'https://tenor.com/bGiN5.gif',
-            'Foxy': 'https://tenor.com/bzPsC.gif',
-            'Freddy': 'https://tenor.com/kZdzqU7zgoG.gif'
-        }
 
         self.animatronics = {
             'Bonnie': {'side': 'left', 'aggression': night},
@@ -41,8 +38,6 @@ class FNAFGame:
             drain += 2
         if self.right_door:
             drain += 2
-        if self.camera_on:
-            drain += 1
         return drain
 
     def move_animatronics(self):
@@ -91,8 +86,7 @@ async def game_loop():
             game.minute = 0
             game.hour += 1
 
-        game.power -= game.power_drain()
-        game.power = max(0, game.power)
+        game.power = max(0, game.power - game.power_drain())
 
         if game.hour >= 6:
             game.game_over = True
@@ -106,9 +100,7 @@ async def game_loop():
             game.game_over = True
             player_stats[game.player_id]['deaths'] += 1
             channel = bot.get_channel(game.channel_id)
-            await channel.send(self.gifs[attacker])
             await channel.send(f"💀 **{attacker} GOT YOU!**")
 
-# ✅ NERDHOSTING-SAFE ENV ACCESS (NO import os)
-TOKEN = __import__("os").environ.get("DISCORD_TOKEN")
+# ✅ NERDHOSTING-APPROVED TOKEN USAGE
 bot.run(TOKEN)
