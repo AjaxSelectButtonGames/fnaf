@@ -1,38 +1,67 @@
-import discord
-from discord.ext import commands, tasks
+# =========================
+# ENV + IMPORTS
+# =========================
+import os
 import random
 import asyncio
-from dotenv import dotenv_values  # ✅ APPROVED
+import discord
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
 
-# Load .env from bot repo directory
-config = dotenv_values()
-TOKEN = config.get("DISCORD_TOKEN")
+# Load environment variables (safe on NerdHosting)
+load_dotenv()
 
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is missing from .env")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+if not DISCORD_TOKEN:
+    raise RuntimeError("DISCORD_TOKEN is missing from environment variables")
 
+# =========================
+# DISCORD SETUP
+# =========================
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
+# =========================
+# GAME STATE
+# =========================
 games = {}
 player_stats = {}
 
+# =========================
+# GAME CLASS
+# =========================
 class FNAFGame:
     def __init__(self, player_id, night=1):
         self.player_id = player_id
-        self.night = night
+        self.night = max(1, min(night, 7))
         self.hour = 0
         self.minute = 0
         self.power = 100
+
         self.left_door = False
         self.right_door = False
+        self.left_light = False
+        self.right_light = False
+        self.camera_on = False
+        self.current_camera = "Show Stage"
+
         self.game_over = False
         self.channel_id = None
+        self.last_camera_check = 0
 
         self.animatronics = {
-            'Bonnie': {'side': 'left', 'aggression': night},
-            'Chica': {'side': 'right', 'aggression': night},
+            "Bonnie": {"location": "Show Stage", "aggression": night, "path": "left"},
+            "Chica": {"location": "Show Stage", "aggression": night, "path": "right"},
+            "Foxy": {"stage": 0},
+            "Freddy": {"location": "Show Stage", "aggression": night - 1},
+        }
+
+        self.gifs = {
+            "Bonnie": "https://tenor.com/uhaH1QUiuGV.gif",
+            "Chica": "https://tenor.com/v5OfDTV82P0.gif",
+            "Foxy": "https://tenor.com/c0zLNtiVYkX.gif",
+            "Freddy": "https://tenor.com/lIunPhLWSBd.gif",
         }
 
     def power_drain(self):
@@ -41,46 +70,94 @@ class FNAFGame:
             drain += 2
         if self.right_door:
             drain += 2
+        if self.left_light:
+            drain += 1
+        if self.right_light:
+            drain += 1
+        if self.camera_on:
+            drain += 1
         return drain
 
-    def move_animatronics(self):
-        for name, data in self.animatronics.items():
-            if random.randint(1, 20) <= data['aggression']:
-                if data['side'] == 'left' and not self.left_door:
-                    return name
-                if data['side'] == 'right' and not self.right_door:
-                    return name
-        return None
-
+# =========================
+# BOT EVENTS
+# =========================
 @bot.event
 async def on_ready():
-    print(f"✅ {bot.user} connected")
+    print(f"✅ Logged in as {bot.user}")
     game_loop.start()
 
+# =========================
+# COMMANDS
+# =========================
 @bot.command()
 async def start(ctx, night: int = 1):
+    if ctx.author.id in games and not games[ctx.author.id].game_over:
+        await ctx.send("You're already in a game!")
+        return
+
     game = FNAFGame(ctx.author.id, night)
     game.channel_id = ctx.channel.id
     games[ctx.author.id] = game
 
     if ctx.author.id not in player_stats:
-        player_stats[ctx.author.id] = {'wins': 0, 'deaths': 0}
+        player_stats[ctx.author.id] = {"wins": 0, "deaths": 0}
 
-    await ctx.send("🌙 Night started. Survive until 6AM!")
+    await ctx.send(f"🌙 **Night {night} started!** Survive until 6AM!")
 
 @bot.command()
 async def left(ctx):
-    games[ctx.author.id].left_door = not games[ctx.author.id].left_door
-    await ctx.send("🚪 Left door toggled")
+    game = games.get(ctx.author.id)
+    if not game or game.game_over:
+        return await ctx.send("No active game.")
+    game.left_door = not game.left_door
+    await ctx.send(f"Left door {'CLOSED 🚪' if game.left_door else 'OPEN ⬜'}")
 
 @bot.command()
 async def right(ctx):
-    games[ctx.author.id].right_door = not games[ctx.author.id].right_door
-    await ctx.send("🚪 Right door toggled")
+    game = games.get(ctx.author.id)
+    if not game or game.game_over:
+        return await ctx.send("No active game.")
+    game.right_door = not game.right_door
+    await ctx.send(f"Right door {'CLOSED 🚪' if game.right_door else 'OPEN ⬜'}")
 
+@bot.command()
+async def cam(ctx):
+    game = games.get(ctx.author.id)
+    if not game or game.game_over:
+        return await ctx.send("No active game.")
+    game.camera_on = not game.camera_on
+    game.last_camera_check = game.minute
+    await ctx.send(f"Camera {'ON 📹' if game.camera_on else 'OFF'}")
+
+@bot.command()
+async def status(ctx):
+    game = games.get(ctx.author.id)
+    if not game:
+        return await ctx.send("No active game.")
+
+    embed = discord.Embed(
+        title="🍕 Freddy Fazbear's Pizza",
+        description=f"🕒 **{game.hour}AM** | ⚡ **{game.power}% Power**",
+        color=discord.Color.red() if game.power < 20 else discord.Color.purple()
+    )
+    embed.add_field(name="Left Door", value="🚪" if game.left_door else "⬜", inline=True)
+    embed.add_field(name="Right Door", value="🚪" if game.right_door else "⬜", inline=True)
+    embed.add_field(name="Camera", value="📹 ON" if game.camera_on else "📹 OFF", inline=True)
+
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def quit(ctx):
+    if ctx.author.id in games:
+        del games[ctx.author.id]
+        await ctx.send("Game ended. 🍕")
+
+# =========================
+# GAME LOOP (PERSISTENT)
+# =========================
 @tasks.loop(seconds=5)
 async def game_loop():
-    for game in list(games.values()):
+    for player_id, game in list(games.items()):
         if game.game_over:
             continue
 
@@ -93,16 +170,21 @@ async def game_loop():
 
         if game.hour >= 6:
             game.game_over = True
-            player_stats[game.player_id]['wins'] += 1
+            player_stats[player_id]["wins"] += 1
             channel = bot.get_channel(game.channel_id)
-            await channel.send("🎉 **6AM — YOU SURVIVED!**")
+            if channel:
+                await channel.send("🎉 **6AM — YOU SURVIVED!**")
             continue
 
-        attacker = game.move_animatronics()
-        if attacker:
+        if game.power <= 0:
             game.game_over = True
-            player_stats[game.player_id]['deaths'] += 1
+            player_stats[player_id]["deaths"] += 1
             channel = bot.get_channel(game.channel_id)
-            await channel.send(f"💀 **{attacker} GOT YOU!**")
+            if channel:
+                await channel.send(game.gifs["Freddy"])
+                await channel.send("💀 **Power ran out… Freddy got you.**")
 
-bot.run(TOKEN)
+# =========================
+# START BOT
+# =========================
+bot.run(DISCORD_TOKEN)
